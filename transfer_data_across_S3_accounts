@@ -1,0 +1,103 @@
+# to run this code, ensure that your outbound bucket has a policy that allows this type of operation
+# the variables you need to change in this code are the outbound and inbound bucket names in line 67 of this script
+
+# the IAM policy for this script requires S3 access and needs to be set in advance
+
+import boto3
+from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
+
+def create_bucket_if_not_exists(s3_client, bucket_name, region):
+    try:
+        s3_client.head_bucket(Bucket=bucket_name)
+        print(f"Bucket {bucket_name} already exists.")
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404':
+            # Bucket does not exist, create bucket
+            if region == 'us-east-1':
+                s3_client.create_bucket(Bucket=bucket_name)
+            else:
+                s3_client.create_bucket(Bucket=bucket_name,
+                                        CreateBucketConfiguration={'LocationConstraint': region})
+            print(f"Bucket {bucket_name} created.")
+        else:
+            raise
+
+# Additional handling in the copy operation
+def copy_bucket_contents(source_bucket, destination_bucket, region):
+    try:
+        source_session = boto3.Session(
+            aws_access_key_id=outbound_access_key,
+            aws_secret_access_key=outbound_secret_access_key,
+            region_name=region
+        )
+        s3_source = source_session.client('s3')
+
+        destination_session = boto3.Session(
+            aws_access_key_id=inbound_access_key,
+            aws_secret_access_key=inbound_secret_access_key,
+            region_name=region
+        )
+        s3_destination = destination_session.client('s3')
+
+        create_bucket_if_not_exists(s3_destination, destination_bucket, region)
+
+        paginator = s3_source.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=source_bucket):
+            if "Contents" in page:
+                for obj in page['Contents']:
+                    copy_source = {
+                        'Bucket': source_bucket,
+                        'Key': obj['Key']
+                    }
+                    try:
+                        s3_destination.copy(copy_source, destination_bucket, obj['Key'])
+                        print(f"Copied {obj['Key']} from {source_bucket} to {destination_bucket}")
+                    except ClientError as e:
+                        print(f"Failed to copy {obj['Key']}: {e}")
+                        continue
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+def copy_buckets():
+    # List of buckets to copy from source to destination
+    buckets_to_copy = [
+        (outbound_bucket_name, inbound_bucket_name)
+    ]
+    for source, destination in buckets_to_copy:
+        copy_bucket_contents(source, destination, region='us-east-2')  # Ensure region is correct
+
+def list_s3_buckets(access_key, secret_access_key):
+    try:
+        # Create a session using your specific credentials
+        session = boto3.Session(
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_access_key
+        )
+        # Create an S3 client using this session
+        s3 = session.client('s3')
+
+        # Call S3 to list current buckets
+        response = s3.list_buckets()
+
+        # Get a list of all bucket names from the response
+        buckets = [bucket['Name'] for bucket in response['Buckets']]
+
+        # Print out the bucket list
+        print("Bucket List:")
+        for bucket in buckets:
+            print(bucket)
+
+    except NoCredentialsError:
+        print("Credentials not available")
+    except PartialCredentialsError:
+        print("Incomplete credentials passed")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    list_s3_buckets(outbound_access_key, outbound_secret_access_key)
+    list_s3_buckets(inbound_access_key, inbound_secret_access_key)
+    copy_buckets()
